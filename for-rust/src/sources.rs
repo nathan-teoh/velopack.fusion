@@ -113,8 +113,8 @@ impl GithubUpdateSource {
     }
 
     fn get_api_base_url(&self) -> Result<String> {
+        //https://github.com/velopack/velopack/blob/23d27db4b5147a650e24673eaadfe832db50c567/src/Velopack/Sources/GithubSource.cs#L135
         let base_url: String;
-
         //check for valid URL
         match Url::parse(&self.url) {
             Ok(url) => {
@@ -126,7 +126,6 @@ impl GithubUpdateSource {
                     //if not github.com url, it's probably an enterprise server
                     base_url = format!("{}://{}/api/v3/", url.scheme(), url.host_str().unwrap());
                 }
-
                 return Ok(base_url);
             }
             Err(err) => {
@@ -137,12 +136,14 @@ impl GithubUpdateSource {
 }
 
 impl UpdateSource for GithubUpdateSource {
-    fn get_release_feed(&self, channel: &str, app: &manifest::Manifest) -> Result<VelopackAssetFeed> {
+    fn get_release_feed(&self, _channel: &str, _app: &manifest::Manifest) -> Result<VelopackAssetFeed> {
         let per_page = 10;
         let page = 1;
-        let releases_path = format!("repos/{}/releases?per_page{per_page}&page={page}", self.url);
+        let url = Url::parse(&self.url).expect("url error");
+        let releases_path = format!("repos{}releases?per_page{per_page}&page={page}", url.path());
         let base_path = self.get_api_base_url()?;
         let get_releases_uri = format!("{base_path}{releases_path}");
+        println!("{get_releases_uri}");
         let response = download::download_url_as_string(&get_releases_uri)?;
         let releases: VelopackAssetFeed = serde_json::from_str(&response)?;
         Ok(releases)
@@ -161,14 +162,30 @@ impl UpdateSource for GithubUpdateSource {
     }
 }
 
-#[test]
-fn test_get_api_base_url(){
-    let normal_gh_url = "https://github.com/velopack/velopack/";
-    let enterprise_gh_url = "http://internal.github.server.local/";
+#[cfg(test)]
+mod test{
+    use crate::manifest::Manifest;
 
-    let normal_gh_source = GithubUpdateSource::new(normal_gh_url);
-    let enterprise_gh_source = GithubUpdateSource::new(enterprise_gh_url);
+    use super::*;
+    #[test]
+    fn get_github_api_base_url(){
+        let normal_gh_url = "https://github.com/velopack/velopack/";
+        let enterprise_gh_url = "http://internal.github.server.local/";
+    
+        let normal_gh_source = GithubUpdateSource::new(normal_gh_url);
+        let enterprise_gh_source = GithubUpdateSource::new(enterprise_gh_url);
+    
+        assert_eq!("https://api.github.com/",normal_gh_source.get_api_base_url().unwrap());
+        assert_eq!("http://internal.github.server.local/api/v3/",enterprise_gh_source.get_api_base_url().unwrap());
+    }
 
-    assert_eq!("https://api.github.com/",normal_gh_source.get_api_base_url().unwrap());
-    assert_eq!("http://internal.github.server.local/api/v3/",enterprise_gh_source.get_api_base_url().unwrap());
+    #[test]
+    fn get_release_feed(){
+        let normal_gh_url = "https://github.com/velopack/velopack/";
+    
+        let normal_gh_source = GithubUpdateSource::new(normal_gh_url);
+        let app = Manifest::default();
+
+        println!("{:?}",normal_gh_source.get_release_feed("", &app).unwrap());
+    }
 }
