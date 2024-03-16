@@ -104,14 +104,15 @@ impl UpdateSource for FileSource {
 #[derive(Clone)]
 pub struct GithubUpdateSource {
     url: String,
+    prerelease: bool,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct GithubRelease{
     name: String,
-    prerelease: bool,
+    pub prerelease: bool,
     published_at: String,
-    assets: Vec<GithubAsset>,
+    pub assets: Vec<GithubAsset>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -124,9 +125,10 @@ pub struct GithubAsset{
 
 impl GithubUpdateSource {
     /// Create a new GithubUpdateSource with the specified base URL.
-    pub fn new(url: &str) -> Self {
+    pub fn new(url: &str, prerelease: bool) -> Self {
         GithubUpdateSource { 
-            url: url.to_owned() 
+            url: url.to_owned(),
+            prerelease: prerelease,
         }
     }
 
@@ -147,61 +149,43 @@ impl GithubUpdateSource {
                 return Ok(base_url);
             }
             Err(err) => {
-                panic!("Invalid URL. We should never be here.");
+                panic!("Invalid URL. We should never be here. {err}");
             }
         }
     }
-    pub fn get_release_feed_test(&self) -> Result<()>{
-        let per_page = 10;
-        let page = 1;
-        let url = Url::parse(&self.url).expect("url error");
-        let releases_path = format!("repos{}/releases?per_page{per_page}&page={page}", url.path().trim_end_matches('/'));
-        let base_path = self.get_api_base_url()?;
-        let get_releases_uri = format!("{base_path}{releases_path}");
-        
-        let response = download::download_url_as_string(&get_releases_uri)?;
-        let releases: Vec<GithubRelease> = serde_json::from_str(&response).expect("parse error");
-        println!("{:#?}",releases[0]);
-        Ok(())
-    }
 }
 
-impl From<GithubAsset> for VelopackAssetFeed{
-    fn from(value: GithubAsset) -> Self {
-        //we need to transform `GithubAsset` into `VelopackAssetFeed`
-    }
-}
+
 
 impl UpdateSource for GithubUpdateSource {
-    fn get_release_feed(&self, _channel: &str, _app: &manifest::Manifest) -> Result<VelopackAssetFeed> {
+    fn get_release_feed(&self, channel: &str, _app: &manifest::Manifest) -> Result<VelopackAssetFeed> {
         let per_page = 10;
         let page = 1;
-        let url = Url::parse(&self.url).expect("url error");
+        let url = Url::parse(&self.url)?;
         let releases_path = format!("repos{}/releases?per_page{per_page}&page={page}", url.path().trim_end_matches('/'));
         let base_path = self.get_api_base_url()?;
         let get_releases_uri = format!("{base_path}{releases_path}");
-        
         let response = download::download_url_as_string(&get_releases_uri)?;
-        println!("{response}");
-
-        //This works
         let releases : Vec<GithubRelease> = serde_json::from_str(&response)?;
-
-        //This does not work
-        let releases: VelopackAssetFeed = serde_json::from_str(&response)?;
-
-        //We need to provide `GithubRelease` with `.into()`
-
-        Ok(releases)
+        let latest_release_gh_asset: &GithubAsset = releases.iter()
+            .filter(|release| !release.prerelease)
+            .flat_map(|release| &release.assets)
+            .filter(|asset| asset.name == format!("releases.{channel}.json"))
+            .next().unwrap();   //unwrap bad
+        let response = download::download_url_as_string(&latest_release_gh_asset.browser_download_url)?;
+        let velopack_asset: VelopackAssetFeed = serde_json::from_str(&response)?;
+        //println!("{releases:#?}");
+        Ok(velopack_asset)
     }
 
     fn download_release_entry<A>(&self, asset: &VelopackAsset, local_file: &str, progress: A) -> Result<()>
         where A: FnMut(i16)
     {
-        let path = self.url.trim_end_matches('/').to_owned() + "/";
-        let url = url::Url::parse(&path)?;
-        let asset_url = url.join(&asset.FileName)?;
-
+        let url = url::Url::parse(&self.url)?;
+        let host = url.host_str().unwrap().trim_end_matches('/');
+        let path = url.path().trim_end_matches('/');
+        let asset_url = format!("{}{}/releases/download/{}/{}",host,path,asset.Version,asset.FileName);
+        println!("{asset_url}");
         info!("About to download from URL '{}' to file '{}'", asset_url, local_file);
         download::download_url_to_file(asset_url.as_str(), local_file, progress)?;
         Ok(())
@@ -218,25 +202,35 @@ mod test{
         let normal_gh_url = "https://github.com/velopack/velopack/";
         let enterprise_gh_url = "http://internal.github.server.local/";
     
-        let normal_gh_source = GithubUpdateSource::new(normal_gh_url);
-        let enterprise_gh_source = GithubUpdateSource::new(enterprise_gh_url);
-    
+        let normal_gh_source = GithubUpdateSource::new(normal_gh_url,false);
+        let enterprise_gh_source = GithubUpdateSource::new(enterprise_gh_url,false);
+
         assert_eq!("https://api.github.com/",normal_gh_source.get_api_base_url().unwrap());
         assert_eq!("http://internal.github.server.local/api/v3/",enterprise_gh_source.get_api_base_url().unwrap());
     }
 
     #[test]
     fn get_release_feed(){
-        // We expect nothing back for this repo, but if we switched to a repo with releases, we get JSON data back.
-        // eg: https://github.com/Aircoookie/WLED/
-        let normal_gh_url = "https://github.com/Aircoookie/WLED/";
+        let normal_gh_url = "https://github.com/caesay/VelopackHackathonTest";
     
-        let normal_gh_source = GithubUpdateSource::new(normal_gh_url);
+        let normal_gh_source = GithubUpdateSource::new(normal_gh_url,false);
         let _app = Manifest::default();
 
         //write a better assert
-       // println!("{:?}",normal_gh_source.get_release_feed("",&_app).unwrap());
-       // println!("{:?}",normal_gh_source.get_release_feed_test().unwrap());
+       println!("{:#?}",normal_gh_source.get_release_feed("win",&_app).unwrap());
+    }
+
+    #[test]
+    fn get_release_entry(){
+        let normal_gh_url = "https://github.com/caesay/VelopackHackathonTest";
+        let mut progress_closure = |progress: i16| {
+            println!("Progress: {}%", progress);
+            // Additional progress tracking logic here
+        };
+        let normal_gh_source = GithubUpdateSource::new(normal_gh_url,false);
+        let _app = Manifest::default();
+        let asset = normal_gh_source.get_release_feed("win", &_app).unwrap();
+        normal_gh_source.download_release_entry(&asset.Assets[0], "C:\\Users\\user\\Documents\\velopack.fusion\\for-rust", progress_closure);
     }
 }
 
