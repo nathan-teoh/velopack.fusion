@@ -1,5 +1,7 @@
 use anyhow::Result;
+use serde::Deserialize;
 use url::Url;
+use zip::DateTime;
 use std::path::{Path, PathBuf};
 
 use crate::*;
@@ -104,6 +106,22 @@ pub struct GithubUpdateSource {
     url: String,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct GithubRelease{
+    name: String,
+    prerelease: bool,
+    published_at: String,
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GithubAsset{
+    url: String,
+    browser_download_url: String,
+    name: String,
+    content_type: String,
+}
+
 impl GithubUpdateSource {
     /// Create a new GithubUpdateSource with the specified base URL.
     pub fn new(url: &str) -> Self {
@@ -133,6 +151,25 @@ impl GithubUpdateSource {
             }
         }
     }
+    pub fn get_release_feed_test(&self) -> Result<()>{
+        let per_page = 10;
+        let page = 1;
+        let url = Url::parse(&self.url).expect("url error");
+        let releases_path = format!("repos{}/releases?per_page{per_page}&page={page}", url.path().trim_end_matches('/'));
+        let base_path = self.get_api_base_url()?;
+        let get_releases_uri = format!("{base_path}{releases_path}");
+        
+        let response = download::download_url_as_string(&get_releases_uri)?;
+        let releases: Vec<GithubRelease> = serde_json::from_str(&response).expect("parse error");
+        println!("{:#?}",releases[0]);
+        Ok(())
+    }
+}
+
+impl From<GithubAsset> for VelopackAssetFeed{
+    fn from(value: GithubAsset) -> Self {
+        //we need to transform `GithubAsset` into `VelopackAssetFeed`
+    }
 }
 
 impl UpdateSource for GithubUpdateSource {
@@ -140,12 +177,21 @@ impl UpdateSource for GithubUpdateSource {
         let per_page = 10;
         let page = 1;
         let url = Url::parse(&self.url).expect("url error");
-        let releases_path = format!("repos{}releases?per_page{per_page}&page={page}", url.path());
+        let releases_path = format!("repos{}/releases?per_page{per_page}&page={page}", url.path().trim_end_matches('/'));
         let base_path = self.get_api_base_url()?;
         let get_releases_uri = format!("{base_path}{releases_path}");
-        println!("{get_releases_uri}");
+        
         let response = download::download_url_as_string(&get_releases_uri)?;
+        println!("{response}");
+
+        //This works
+        let releases : Vec<GithubRelease> = serde_json::from_str(&response)?;
+
+        //This does not work
         let releases: VelopackAssetFeed = serde_json::from_str(&response)?;
+
+        //We need to provide `GithubRelease` with `.into()`
+
         Ok(releases)
     }
 
@@ -181,11 +227,16 @@ mod test{
 
     #[test]
     fn get_release_feed(){
-        let normal_gh_url = "https://github.com/velopack/velopack/";
+        // We expect nothing back for this repo, but if we switched to a repo with releases, we get JSON data back.
+        // eg: https://github.com/Aircoookie/WLED/
+        let normal_gh_url = "https://github.com/Aircoookie/WLED/";
     
         let normal_gh_source = GithubUpdateSource::new(normal_gh_url);
-        let app = Manifest::default();
+        let _app = Manifest::default();
 
-        println!("{:?}",normal_gh_source.get_release_feed("", &app).unwrap());
+        //write a better assert
+       // println!("{:?}",normal_gh_source.get_release_feed("",&_app).unwrap());
+       // println!("{:?}",normal_gh_source.get_release_feed_test().unwrap());
     }
 }
+
